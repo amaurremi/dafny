@@ -14202,8 +14202,9 @@ namespace Microsoft.Dafny {
         return Translator.Substitute(e.Body, null, substMap);
       }
 
-      public Expr MaybeLit(Expr expr, Bpl.Type type) {
-        return stripLits ? expr : translator.Lit(expr, type);
+      
+      public Expr MaybeLit(Expr expr, Bpl.Type type, bool noLit = false) {
+        return noLit || stripLits ? expr : translator.Lit(expr, type);
       }
 
       public Expr MaybeLit(Expr expr) {
@@ -15430,8 +15431,9 @@ namespace Microsoft.Dafny {
                 new Bpl.LambdaExpr(e.tok, new List<TypeVariable>(), bvars, null, ebody),
                 new Bpl.LambdaExpr(e.tok, new List<TypeVariable>(), bvars, null, reqbody),
                 new Bpl.LambdaExpr(e.tok, new List<TypeVariable>(), bvars, null, rdbody))),
-                layerIntraCluster != null ? layerIntraCluster.ToExpr() : layerInterCluster.ToExpr()),
-          predef.HandleType);
+            layerIntraCluster != null ? layerIntraCluster.ToExpr() : layerInterCluster.ToExpr()),
+          predef.HandleType,
+          ComputeFreeVariables(e).Count > 0);
       }
 
       public void TrLetExprPieces(LetExpr let, out List<Bpl.Variable> lhss, out List<Bpl.Expr> rhss) {
