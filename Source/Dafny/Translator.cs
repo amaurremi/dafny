@@ -14202,8 +14202,9 @@ namespace Microsoft.Dafny {
         return Translator.Substitute(e.Body, null, substMap);
       }
 
-      public Expr MaybeLit(Expr expr, Bpl.Type type) {
-        return stripLits ? expr : translator.Lit(expr, type);
+      
+      public Expr MaybeLit(Expr expr, Bpl.Type type, bool noLit = false) {
+        return noLit || stripLits ? expr : translator.Lit(expr, type);
       }
 
       public Expr MaybeLit(Expr expr) {
@@ -15423,15 +15424,14 @@ namespace Microsoft.Dafny {
           translator.InRWClause(e.tok, o, null, e.Reads.ConvertAll(su.SubstFrameExpr), et, null, null));
         rdbody = translator.FunctionCall(e.tok, "SetRef_to_SetBox", predef.SetType(e.tok, true, predef.BoxType), rdbody);
 
-        return MaybeLit(
-          translator.FunctionCall(e.tok, BuiltinFunction.AtLayer, predef.HandleType,
-            new Bpl.LambdaExpr(e.tok, new List<TypeVariable>(), lvars, null,
-              translator.FunctionCall(e.tok, translator.Handle(e.BoundVars.Count), predef.BoxType,
-                new Bpl.LambdaExpr(e.tok, new List<TypeVariable>(), bvars, null, ebody),
-                new Bpl.LambdaExpr(e.tok, new List<TypeVariable>(), bvars, null, reqbody),
-                new Bpl.LambdaExpr(e.tok, new List<TypeVariable>(), bvars, null, rdbody))),
-                layerIntraCluster != null ? layerIntraCluster.ToExpr() : layerInterCluster.ToExpr()),
-          predef.HandleType);
+        var functionCall = translator.FunctionCall(e.tok, BuiltinFunction.AtLayer, predef.HandleType,
+          new Bpl.LambdaExpr(e.tok, new List<TypeVariable>(), lvars, null,
+            translator.FunctionCall(e.tok, translator.Handle(e.BoundVars.Count), predef.BoxType,
+              new Bpl.LambdaExpr(e.tok, new List<TypeVariable>(), bvars, null, ebody),
+              new Bpl.LambdaExpr(e.tok, new List<TypeVariable>(), bvars, null, reqbody),
+              new Bpl.LambdaExpr(e.tok, new List<TypeVariable>(), bvars, null, rdbody))),
+          layerIntraCluster != null ? layerIntraCluster.ToExpr() : layerInterCluster.ToExpr());
+        return MaybeLit(functionCall, predef.HandleType, ComputeFreeVariables(e).Count > 0);
       }
 
       public void TrLetExprPieces(LetExpr let, out List<Bpl.Variable> lhss, out List<Bpl.Expr> rhss) {
