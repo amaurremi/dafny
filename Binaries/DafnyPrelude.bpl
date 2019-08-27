@@ -181,13 +181,14 @@ axiom (forall<T> v : T, t : Ty, h : Heap ::
     ( $IsAllocBox($Box(v), t, h) <==> $IsAlloc(v,t,h) ));
 
 // ---------------------------------------------------------------
-// -- Is, IsAlloc, and Arity -------------------------------------
+// -- Is, IsAlloc, IsGoodHandle, and Arity -----------------------
 // ---------------------------------------------------------------
 
 // Type-argument to $Is is the /representation type/,
 // the second value argument to $Is is the actual type.
 function $Is<T>(T,Ty): bool;           // no heap for now
 function $IsAlloc<T>(T,Ty,Heap): bool;
+function $IsGoodHandle(HandleType): bool;
 function $Arity(HandleType): int;
 
 // Corresponding entries for boxes...

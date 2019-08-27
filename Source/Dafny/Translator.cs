@@ -8446,7 +8446,7 @@ namespace Microsoft.Dafny {
               Snoc(Map(Enumerable.Range(0, arity), i =>
                   BplAnd(MkIs(boxes[i], types[i], true), MkIsAlloc(boxes[i], types[i], h0, true))),
                 BplAnd(MkIs(f, ClassTyCon(ad, types)), isAlloc)))
-            : MkArityEq(f, arity);
+            : BplAnd(MkIsGoodHandle(f), MkArityEq(f, arity));
 
           Action<Bpl.Expr, ReqReadsApp, int> AddFrameForFunction = (hN, rra, adArity) => {
 
@@ -12392,6 +12392,8 @@ namespace Microsoft.Dafny {
         UserDefinedType udt = (UserDefinedType)type;
         var oneOfTheCases = FunctionCall(tok, "$IsA#" + udt.ResolvedClass.FullSanitizedName, Bpl.Type.Bool, x);
         return BplAnd(r, oneOfTheCases);
+      } else if (type.IsArrowType) {
+        return BplAnd(r, MkIsGoodHandle(x));
       } else {
         return r;
       }
@@ -12512,6 +12514,10 @@ namespace Microsoft.Dafny {
       }
     }
 
+    Bpl.Expr MkIsGoodHandle(Bpl.Expr x) {
+      return FunctionCall(x.tok, BuiltinFunction.IsGoodHandle, null, x);
+    }
+
     Bpl.Expr MkArityEq(Bpl.Expr f, int n) {
       Contract.Assert(n >= 0);
       return Bpl.Expr.Eq(MkArity(f), Bpl.Expr.Literal(n));
@@ -12611,6 +12617,9 @@ namespace Microsoft.Dafny {
       var rhss = new List<AssignmentRhs>() { rhs };
       ProcessRhss(lhsBuilder, bLhss, lhss, rhss, builder, locals, etran);
       builder.Add(CaptureState(stmt));
+      if (lhs.Type.IsArrowType) {
+        builder.Add(new Bpl.AssumeCmd(lhs.tok, MkIsGoodHandle(etran.TrExpr(lhs))));
+      }
     }
 
     void ProcessRhss(List<AssignToLhs> lhsBuilder, List<Bpl.IdentifierExpr/*may be null*/> bLhss,
@@ -16017,6 +16026,7 @@ namespace Microsoft.Dafny {
 
       Is, IsBox,
       IsAlloc, IsAllocBox,
+      IsGoodHandle,
       Arity,
 
       TraitParent,
@@ -16210,6 +16220,10 @@ namespace Microsoft.Dafny {
           Contract.Assert(args.Length == 3);
           Contract.Assert(typeInstantiation == null);
           return FunctionCall(tok, "$IsAllocBox", Bpl.Type.Bool, args);
+        case BuiltinFunction.IsGoodHandle:
+          Contract.Assert(args.Length == 1);
+          Contract.Assert(typeInstantiation == null);
+          return FunctionCall(tok, "$IsGoodHandle", Bpl.Type.Bool, args);
         case BuiltinFunction.Arity:
           Contract.Assert(args.Length == 1);
           Contract.Assert(typeInstantiation == null);
