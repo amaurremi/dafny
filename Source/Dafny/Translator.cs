@@ -8042,6 +8042,8 @@ namespace Microsoft.Dafny {
       return (ReqReadsApp) Enum.Parse(typeof(ReqReadsApp), char.ToUpper(rra[0]) + rra.Substring(1)); // todo (MR) super ugly
     }
 
+    public readonly string reqReadsAppMatchError = "invalid ReqReadsApp value";
+    
     /// <summary>
     /// The type of the values in a `Requires`/`Reads`/`Apply` map (see type `X` in the description of <see cref="ReqReadsApp"/>)
     /// </summary>
@@ -8054,7 +8056,23 @@ namespace Microsoft.Dafny {
         case ReqReadsApp.Apply:
           return defaultRetType ?? predef.BoxType;
         default:
-          throw new ArgumentException("invalid ReqReadsApp value");
+          throw new ArgumentException(reqReadsAppMatchError);
+      }
+    }
+    
+    // <summary>
+    // The names of `Requires`/`Reads`/`Apply` functions when they appear as parameters of a `Handle`
+    // </summary>
+    public String RraSelector(ReqReadsApp rra) {
+      switch (rra) {
+        case ReqReadsApp.Requires:
+          return "r";
+        case ReqReadsApp.Reads:
+          return "rd";
+        case ReqReadsApp.Apply:
+          return "h";
+        default:
+          throw new ArgumentException(reqReadsAppMatchError);
       }
     }
 
@@ -8333,16 +8351,16 @@ namespace Microsoft.Dafny {
         // forall p: [Heap, Box, ..., Box] Box, heap : Heap, b1, ..., bN : Box
         //      :: ApplyN(HandleN(h, r, rd))[heap, b1, ..., bN] == h[heap, b1, ..., bN] <== r[heap, b1, ..., bN]
         //      :: RequiresN(HandleN(h, r, rd))[heap, b1, ..., bN] <== r[heap, b1, ..., bN]
-        //      :: ReadsN(HandleN(h, r, rd))[heap, b1, ..., bN] == rd[heap, b1, ..., bN]
-        Action<ReqReadsApp, string> SelectorSemantics = (selector, selectorVar) => {
+        //      :: ReadsN(HandleN(h, r, rd))[heap, b1, ..., bN] == rd[heap, b1, ..., bN] <== r[heap, b1, ..., bN]
+        Action<ReqReadsApp> SelectorSemantics = (selector) => {
           var bvars = new List<Bpl.Variable>();
 
+          var selectorVar = RraSelector(selector);
           var heap = BplBoundVar("heap", predef.HeapType, bvars);
 
+          Func<ReqReadsApp, Expr> genArg = rra => BplBoundVar(RraSelector(rra), RraMapType(tok, arity, rra), bvars);
           var handleargs = new List<Bpl.Expr> {
-            BplBoundVar("h", RraMapType(tok, arity, ReqReadsApp.Apply), bvars),
-            BplBoundVar("r", RraMapType(tok, arity, ReqReadsApp.Requires), bvars),
-            BplBoundVar("rd", RraMapType(tok, arity, ReqReadsApp.Reads), bvars)
+            genArg(ReqReadsApp.Apply), genArg(ReqReadsApp.Requires), genArg(ReqReadsApp.Reads)
           };
 
           var boxes = Map(Enumerable.Range(0, arity), i => BplBoundVar("bx" + i, predef.BoxType, bvars));
@@ -8352,26 +8370,29 @@ namespace Microsoft.Dafny {
          
           Bpl.Expr rhs = new Bpl.NAryExpr(tok, new Bpl.MapSelect(tok, arity + 1),
             Cons(new Bpl.IdentifierExpr(tok, selectorVar, RraMapType(tok, arity, selector)), Cons(heap, boxes)));
-          Func<Bpl.Expr, Bpl.Expr, Bpl.Expr> op = Bpl.Expr.Eq;
-          if (selectorVar == "rd") {
-            var bx = BplBoundVar("bx", predef.BoxType, bvars);
-            lhs = Bpl.Expr.SelectTok(tok, lhs, bx);
-            rhs = Bpl.Expr.SelectTok(tok, rhs, bx);
-          }
-          if (selectorVar == "r") {
-            op = (u, v) => Bpl.Expr.Imp(v, u);
-          }
-          if (selectorVar == "h" || selectorVar == "rd") {
-            var req = new Bpl.NAryExpr(tok, new Bpl.MapSelect(tok, arity + 1),
-              Cons(new Bpl.IdentifierExpr(tok, "r", RraMapType(tok, arity, ReqReadsApp.Requires)), Cons(heap, boxes)));
-            op = (u, v) => Bpl.Expr.Imp(req, Bpl.Expr.Eq(u, v));
+          Func<Bpl.Expr, Bpl.Expr, Bpl.Expr> op;
+          var req = new Bpl.NAryExpr(tok, new Bpl.MapSelect(tok, arity + 1),
+            Cons(new Bpl.IdentifierExpr(tok, RraSelector(ReqReadsApp.Requires), RraMapType(tok, arity, ReqReadsApp.Requires)), Cons(heap, boxes)));
+          switch (selector) {
+            case ReqReadsApp.Reads:
+              op = Bpl.Expr.Eq;
+              var bx = BplBoundVar("bx", predef.BoxType, bvars);
+              lhs = Bpl.Expr.SelectTok(tok, lhs, bx);
+              rhs = Bpl.Expr.SelectTok(tok, rhs, bx);
+              break;
+            case ReqReadsApp.Requires:
+            case ReqReadsApp.Apply:
+              op = (u, v) => Bpl.Expr.Imp(req, Bpl.Expr.Eq(u, v));
+              break;
+            default:
+              throw new ArgumentException(reqReadsAppMatchError);
           }
           sink.AddTopLevelDeclaration(new Axiom(tok,
             BplForall(bvars, BplTrigger(lhs), op(lhs, rhs))));
         };
-        SelectorSemantics(ReqReadsApp.Apply, "h");
-        SelectorSemantics(ReqReadsApp.Requires, "r");
-        SelectorSemantics(ReqReadsApp.Reads, "rd");
+        SelectorSemantics(ReqReadsApp.Apply);
+        SelectorSemantics(ReqReadsApp.Requires);
+        SelectorSemantics(ReqReadsApp.Reads);
 
         // function {:inline true}
         //   FuncN._requires#canCall(G...G G: Ty, H:Heap, f:Handle, x ... x :Box): bool
