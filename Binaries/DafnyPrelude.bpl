@@ -1376,3 +1376,11 @@ axiom (forall x, y, z: int ::
 #endif
 
 // -------------------------------------------------------------------------
+// -- Function equality and Functional extensionality
+// -------------------------------------------------------------------------
+
+function Fun#Equal(HandleType, HandleType) : bool;
+
+axiom (forall f: HandleType, g: HandleType ::
+  { Fun#Equal(f, g) }
+  Fun#Equal(f, g) <==> f == g);

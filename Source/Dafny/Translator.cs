@@ -1140,6 +1140,8 @@ namespace Microsoft.Dafny {
         return FunctionCall(tok, BuiltinFunction.SeqEqual, null, e0, e1);
       } else if (type.IsIndDatatype) {
         return FunctionCall(tok, type.AsIndDatatype.FullSanitizedName + "#Equal", Bpl.Type.Bool, e0, e1);
+      } else if (type.IsArrowType) {
+        return FunctionCall(tok, BuiltinFunction.FunEqual, null, e0, e1);
       } else {
         return Bpl.Expr.Eq(e0, e1);
       }
@@ -14953,7 +14955,7 @@ namespace Microsoft.Dafny {
                 var e1args = e.E1.Type.NormalizeExpand().TypeArgs;
                 return translator.CoEqualCall(cot, e0args, e1args, null, this.layerInterCluster.LayerN((int)FuelSetting.FuelAmount.HIGH), e0, e1, expr.tok);
               }
-              if (e.E0.Type.IsIndDatatype) {
+              if (e.E0.Type.IsIndDatatype || e.E0.Type.IsArrowType) {
                 return translator.TypeSpecificEqual(expr.tok, e.E0.Type, e0, e1);
               }
               typ = Bpl.Type.Bool;
@@ -16092,6 +16094,8 @@ namespace Microsoft.Dafny {
       IMapElements,
       IMapEqual,
       IMapGlue,
+      
+      FunEqual,
 
       IndexField,
       MultiIndexField,
@@ -16356,6 +16360,12 @@ namespace Microsoft.Dafny {
           Contract.Assert(args.Length == 1);
           Contract.Assert(typeInstantiation == null);
           return FunctionCall(tok, "$IsGoodMultiSet", Bpl.Type.Bool, args);
+        
+        case BuiltinFunction.FunEqual:
+          Contract.Assert(args.Length == 2);
+          Contract.Assert(typeInstantiation == null);
+          Expr heap = new Bpl.IdentifierExpr(tok, predef.HeapVarName, predef.HeapType);
+          return FunctionCall(tok, "Fun#Equal", Bpl.Type.Bool, args);
 
         case BuiltinFunction.SeqLength:
           Contract.Assert(args.Length == 1);
