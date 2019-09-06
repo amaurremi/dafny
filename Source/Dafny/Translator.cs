@@ -8419,10 +8419,28 @@ namespace Microsoft.Dafny {
         UserSelectorFunction(RraName(ReqReadsApp.Requires, ad.Arity), ad.Requires);
         UserSelectorFunction(RraName(ReqReadsApp.Reads, ad.Arity), ad.Reads);
 
-        // frame axiom
+        // frame axiom and is-good-handle axiom
         /*
-
+          frame axiom:
+          
           forall h0, h1 : Heap, f : HandleType, bx1 .. bxN : Box,
+            HeapSucc(h0, h1) && GoodHeap(h0) && GoodHeap(h1)
+            && Is[&IsAllocBox](bxI, tI, h0)              // in h0, not hN
+            && Is[&IsAlloc](f, Func(t1,..,tN, tN+1), h0) // in h0, not hN
+            && IsGoodHandle(f)
+            &&
+            (forall o : ref::
+                 o != null [&& h0[o, alloc] && h1[o, alloc] &&]
+                 Reads(h,hN,bxs)[Box(o)]             // for hN in h0 and h1
+              ==> h0[o,field] == h1[o,field])
+          ==>  Reads(..h0..) == Reads(..h1..)
+           AND Requires(f,h0,bxs) == Requires(f,h1,bxs) // which is needed for the next
+           AND  Apply(f,h0,bxs) == Apply(f,h0,bxs)
+           
+           is-good-handle axiom:
+           
+           forall f: HandleType,
+           (forall h0, h1 : Heap, bx1 .. bxN : Box,
             HeapSucc(h0, h1) && GoodHeap(h0) && GoodHeap(h1)
             && Is[&IsAllocBox](bxI, tI, h0)              // in h0, not hN
             && Is[&IsAlloc](f, Func(t1,..,tN, tN+1), h0) // in h0, not hN
@@ -8433,7 +8451,12 @@ namespace Microsoft.Dafny {
               ==> h0[o,field] == h1[o,field])
           ==>  Reads(..h0..) == Reads(..h1..)
            AND Requires(f,h0,bxs) == Requires(f,h1,bxs) // which is needed for the next
-           AND  Apply(f,h0,bxs) == Apply(f,h0,bxs)
+           AND  Apply(f,h0,bxs) == Apply(f,h0,bxs))
+           ==>
+           IsGoodHandle(f)
+           
+           The latter axiom essentially says that if the "frame axiom" holds for a handle
+           (without the fram axiom's IsGoodHandle antecedent) then the handle is good.
 
            The [...] expressions are omitted for /allocated:0 and /allocated:1:
              - in these modes, functions are pure values and IsAlloc of a function is trivially true
@@ -8445,6 +8468,8 @@ namespace Microsoft.Dafny {
                1) f has an empty reads clause
                2) f explictly states that everything is its reads clause is allocated
          */
+        // todo (MR) there currently are no tests that rely on the IsGoodHandle axiom
+        
         {
           var bvars = new List<Bpl.Variable>();
 
@@ -8459,18 +8484,13 @@ namespace Microsoft.Dafny {
             FunctionCall(tok, BuiltinFunction.IsGoodHeap, null, h0),
             FunctionCall(tok, BuiltinFunction.IsGoodHeap, null, h1));
 
-          var f = BplBoundVar("f", predef.HandleType, bvars);
+          Bpl.Expr f;
+          var fVar = BplBoundVar("f", predef.HandleType, out f);
           var boxes = Map(Enumerable.Range(0, arity), i => BplBoundVar("bx" + i, predef.BoxType, bvars));
 
           var isAlloc = MkIsAlloc(f, ClassTyCon(ad, types), h0);
-          var isness = commonNotFrugalHeapUse
-            ? BplAnd(
-              Snoc(Map(Enumerable.Range(0, arity), i =>
-                  BplAnd(MkIs(boxes[i], types[i], true), MkIsAlloc(boxes[i], types[i], h0, true))),
-                BplAnd(MkIs(f, ClassTyCon(ad, types)), isAlloc)))
-            : BplAnd(MkIsGoodHandle(f), MkArityEq(f, arity));
 
-          Action<Bpl.Expr, ReqReadsApp, int> AddFrameForFunction = (hN, rra, adArity) => {
+          Action<Bpl.Expr, ReqReadsApp, int, bool> AddFrameOrGoodHandleForFunction = (hN, rra, adArity, frame) => {
 
             // inner forall vars
             var ivars = new List<Bpl.Variable>();
@@ -8497,20 +8517,45 @@ namespace Microsoft.Dafny {
               trigger.Add(isAlloc);
             }
 
-            sink.AddTopLevelDeclaration(new Axiom(tok,
-              BplForall(bvars,
-                new Bpl.Trigger(tok, true, trigger),
-                BplImp(
-                  BplAnd(BplAnd(BplAnd(heapSucc, goodHeaps), isness), inner_forall),
-                  Bpl.Expr.Eq(fn(h0), fn(h1)))), "frame axiom for " + RraName(rra, adArity)));
+            var goodHandle = MkIsGoodHandle(f);
+            var arityEq = MkArityEq(f, arity);
+            var isness = commonNotFrugalHeapUse
+              ? BplAnd(
+                Snoc(Map(Enumerable.Range(0, arity), i =>
+                    BplAnd(MkIs(boxes[i], types[i], true), MkIsAlloc(boxes[i], types[i], h0, true))),
+                  BplAnd(MkIs(f, ClassTyCon(ad, types)), isAlloc)))
+              : BplAnd(goodHandle, arityEq);
+
+            var axiomBvars = frame ? new List<Variable>() { fVar } : new List<Variable>();
+            axiomBvars.AddRange(bvars);
+            var axiomBody = BplForall(axiomBvars,
+              new Bpl.Trigger(tok, true, trigger),
+              BplImp(
+                BplAnd(BplAnd(BplAnd(heapSucc, goodHeaps), frame ? isness : arityEq), inner_forall),
+                Bpl.Expr.Eq(fn(h0), fn(h1))));
+            
+            if (frame) {
+              sink.AddTopLevelDeclaration(new Axiom(tok,
+                axiomBody, "frame axiom for " + RraName(rra, adArity)));
+            } else {
+              sink.AddTopLevelDeclaration(new Axiom(tok,
+                BplForall(new List<Variable>() { fVar }, 
+                  new Bpl.Trigger(tok, true, new List<Bpl.Expr> { goodHandle }),
+                  BplImp(axiomBody,goodHandle)), "IsGoodHandle axiom for arity " + arity));
+            }
           };
 
-          AddFrameForFunction(h0, ReqReadsApp.Apply, ad.Arity);
-          AddFrameForFunction(h1, ReqReadsApp.Apply, ad.Arity);
-          AddFrameForFunction(h0, ReqReadsApp.Reads, ad.Arity);
-          AddFrameForFunction(h1, ReqReadsApp.Reads, ad.Arity);
-          AddFrameForFunction(h0, ReqReadsApp.Requires, ad.Arity);
-          AddFrameForFunction(h1, ReqReadsApp.Requires, ad.Arity);
+          // frame axioms
+          AddFrameOrGoodHandleForFunction(h0, ReqReadsApp.Apply, ad.Arity, true);
+          AddFrameOrGoodHandleForFunction(h1, ReqReadsApp.Apply, ad.Arity, true);
+          AddFrameOrGoodHandleForFunction(h0, ReqReadsApp.Reads, ad.Arity, true);
+          AddFrameOrGoodHandleForFunction(h1, ReqReadsApp.Reads, ad.Arity, true);
+          AddFrameOrGoodHandleForFunction(h0, ReqReadsApp.Requires, ad.Arity, true);
+          AddFrameOrGoodHandleForFunction(h1, ReqReadsApp.Requires, ad.Arity, true);
+          // is-good-handle axioms
+          AddFrameOrGoodHandleForFunction(h0, ReqReadsApp.Requires, ad.Arity, false);
+          AddFrameOrGoodHandleForFunction(h1, ReqReadsApp.Requires, ad.Arity, false);
+
         }
 
         /* axiom (forall heap: Heap, f: HandleType, bx..: Box ::
