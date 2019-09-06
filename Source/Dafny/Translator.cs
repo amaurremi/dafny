@@ -8357,12 +8357,11 @@ namespace Microsoft.Dafny {
             var bx = BplBoundVar("bx", predef.BoxType, bvars);
             lhs = Bpl.Expr.SelectTok(tok, lhs, bx);
             rhs = Bpl.Expr.SelectTok(tok, rhs, bx);
-            // op = Bpl.Expr.Imp;
           }
           if (selectorVar == "r") {
             op = (u, v) => Bpl.Expr.Imp(v, u);
           }
-          if (selectorVar == "h") {
+          if (selectorVar == "h" || selectorVar == "rd") {
             var req = new Bpl.NAryExpr(tok, new Bpl.MapSelect(tok, arity + 1),
               Cons(new Bpl.IdentifierExpr(tok, "r", RraMapType(tok, arity, ReqReadsApp.Requires)), Cons(heap, boxes)));
             op = (u, v) => Bpl.Expr.Imp(req, Bpl.Expr.Eq(u, v));
