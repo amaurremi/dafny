@@ -8329,7 +8329,7 @@ namespace Microsoft.Dafny {
 
       {
         // forall p: [Heap, Box, ..., Box] Box, heap : Heap, b1, ..., bN : Box
-        //      :: ApplyN(HandleN(h, r, rd))[heap, b1, ..., bN] == h[heap, b1, ..., bN]
+        //      :: ApplyN(HandleN(h, r, rd))[heap, b1, ..., bN] == h[heap, b1, ..., bN] <== r[heap, b1, ..., bN]
         //      :: RequiresN(HandleN(h, r, rd))[heap, b1, ..., bN] <== r[heap, b1, ..., bN]
         //      :: ReadsN(HandleN(h, r, rd))[heap, b1, ..., bN] == rd[heap, b1, ..., bN]
         Action<ReqReadsApp, string> SelectorSemantics = (selector, selectorVar) => {
@@ -8359,6 +8359,11 @@ namespace Microsoft.Dafny {
           }
           if (selectorVar == "r") {
             op = (u, v) => Bpl.Expr.Imp(v, u);
+          }
+          if (selectorVar == "h") {
+            var req = new Bpl.NAryExpr(tok, new Bpl.MapSelect(tok, arity + 1),
+              Cons(new Bpl.IdentifierExpr(tok, "r", RraMapType(tok, arity, ReqReadsApp.Requires)), Cons(heap, boxes)));
+            op = (u, v) => Bpl.Expr.Imp(req, Bpl.Expr.Eq(u, v));
           }
           sink.AddTopLevelDeclaration(new Axiom(tok,
             BplForall(bvars, BplTrigger(lhs), op(lhs, rhs))));
