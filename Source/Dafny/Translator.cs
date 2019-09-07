@@ -8686,7 +8686,7 @@ namespace Microsoft.Dafny {
         // $Arity axiom
         /*
            axiom (forall f: HandleType ::
-             { Arity(f) == N }
+             { Arity(f) }
              Arity(f) == N <==> (exists t0: Ty, ..., tN+1 :: $Is(f, Tclass._System.___hFuncN(t0, ..., tN+1))));
         */
         {
@@ -8840,7 +8840,6 @@ namespace Microsoft.Dafny {
         {
           var bvarsOuter = new List<Bpl.Variable>();
           var f = BplBoundVar("f", predef.HandleType, bvarsOuter);
-          var emptyReads = MkEmptyReads(f);
 
           var bvars = new List<Bpl.Variable>();
           var boxes = Map(Enumerable.Range(0, arity), i => BplBoundVar("bx" + i, predef.BoxType, bvars));
@@ -8851,12 +8850,60 @@ namespace Microsoft.Dafny {
           
           var empty = FunctionCall(tok, BuiltinFunction.SetEmpty, predef.BoxType);
           var setEmpty = FunctionCall(tok, BuiltinFunction.SetEqual, null, readsCall, empty);
+          var emptyReads = MkEmptyReads(f);
 
           sink.AddTopLevelDeclaration(new Axiom(tok,
             BplForall(bvarsOuter, BplTrigger(emptyReads), 
               BplImp(BplForall(bvars, BplTrigger(readsCall), 
                   BplImp(BplAnd(goodHeap, requiresCall), setEmpty)), 
-                emptyReads))));
+                emptyReads)), "$EmptyReads axiom for arity " + arity));
+        }
+        
+        // Function extensionality axiom
+        /*
+         axiom (forall f: HandleType, g: HandleType ::
+          { Fun#Equal(f, g) }
+          EmptyReads(f) && EmptyReads(g) &&
+          ((forall bx: Box, ..., bx: Box, heap: Heap ::
+             { RequiresN(f)[heap, bx, ..., bx] }
+             { RequiresN(g)[heap, bx, ..., bx] }
+             $IsGoodHeap(heap) ==> RequiresN(f)[heap, bx, ..., bx] == RequiresN(g)[heap, bx, ..., bx]) &&
+           (forall bx: Box, ..., bx: Box, heap: Heap ::
+             { ApplyN(f)[heap, bx, ..., bx] }
+             { ApplyN(g)[heap, bx, ..., bx] }
+             $IsGoodHeap(heap) && RequiresN(f)[heap, bx, ..., bx] ==>
+             ApplyN(f)[heap, bx, ..., bx] == ApplyN(g)[heap, bx, ..., bx])) ==>
+          Fun#Equal(f, g));
+         */
+
+        {
+          var bvarsOuter = new List<Bpl.Variable>();
+          var f = BplBoundVar("f", predef.HandleType, bvarsOuter);
+          var g = BplBoundVar("g", predef.HandleType, bvarsOuter);
+          var funEqual = FunctionCall(tok, BuiltinFunction.FunEqual, null, f, g);
+
+          var bvars = new List<Bpl.Variable>();
+          var boxes = Map(Enumerable.Range(0, arity), i => BplBoundVar("bx" + i, predef.BoxType, bvars));
+          var h = BplBoundVar("h", predef.HeapType, bvars);
+          var requiresCallF = RequiresCall(tok, boxes.Count, f, boxes, h);
+          var requiresCallG = RequiresCall(tok, boxes.Count, g, boxes, h);
+          var applyCallF = ApplyCall(tok, boxes.Count, f, boxes, h);
+          var applyCallG = ApplyCall(tok, boxes.Count, g, boxes, h);
+          var reqTrigger = new Trigger(tok, true, new List<Expr>() {requiresCallF},
+            BplTrigger(requiresCallG));
+          var applyTrigger = new Trigger(tok, true, new List<Expr>() {applyCallF},
+            BplTrigger(applyCallG));
+          var goodHeap = FunctionCall(tok, BuiltinFunction.IsGoodHeap, null, h);
+
+          sink.AddTopLevelDeclaration((new Axiom(tok,
+            BplForall(bvarsOuter, BplTrigger(funEqual),
+              BplImp(BplAnd(BplAnd(MkEmptyReads(f), MkEmptyReads(g)),
+                  BplAnd(
+                    BplForall(bvars, reqTrigger,
+                      BplImp(goodHeap, Bpl.Expr.Eq(requiresCallF, requiresCallG))),
+                    BplForall(bvars, applyTrigger,
+                      BplImp(BplAnd(goodHeap, requiresCallF), Bpl.Expr.Eq(applyCallF, applyCallG))))),
+                funEqual)), "function extensionality axiom for arity " + arity)));
         }
       }
     }

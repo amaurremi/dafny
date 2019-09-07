@@ -1386,3 +1386,5 @@ axiom (forall f: HandleType, g: HandleType ::
   Fun#Equal(f, g) <==> f == g);
 
 function $EmptyReads(HandleType): bool;
+
+// -------------------------------------------------------------------------
