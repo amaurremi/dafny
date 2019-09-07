@@ -8825,6 +8825,39 @@ namespace Microsoft.Dafny {
                 BplForall(bvarsInner, BplTrigger(applied),
                   BplImp(BplAnd(isAllocBoxes, pre), applied_isAlloc))))));
         }
+        
+        // $EmptyReads axiom
+        /*
+         axiom (forall h: HandleType ::
+          { EmptyReads(h) }
+          (forall bx: Box, ..., bx: Box, heap: Heap ::
+             { ReadsN(h)[heap, bx, ..., bx] }
+             $IsGoodHeap(heap) &&
+             RequiresN(h)[heap, bx, ..., bx] ==>
+             Set#Equal(ReadsN(h)[heap, bx], Set#Empty(): Set Box))
+          ==> EmptyReads(h));
+        */
+        {
+          var bvarsOuter = new List<Bpl.Variable>();
+          var f = BplBoundVar("f", predef.HandleType, bvarsOuter);
+          var emptyReads = MkEmptyReads(f);
+
+          var bvars = new List<Bpl.Variable>();
+          var boxes = Map(Enumerable.Range(0, arity), i => BplBoundVar("bx" + i, predef.BoxType, bvars));
+          var h = BplBoundVar("h", predef.HeapType, bvars);
+          var readsCall = ReadsCall(tok, boxes.Count, f, boxes, h);
+          var requiresCall = RequiresCall(tok, boxes.Count, f, boxes, h);
+          var goodHeap = FunctionCall(tok, BuiltinFunction.IsGoodHeap, null, h);
+          
+          var empty = FunctionCall(tok, BuiltinFunction.SetEmpty, predef.BoxType);
+          var setEmpty = FunctionCall(tok, BuiltinFunction.SetEqual, null, readsCall, empty);
+
+          sink.AddTopLevelDeclaration(new Axiom(tok,
+            BplForall(bvarsOuter, BplTrigger(emptyReads), 
+              BplImp(BplForall(bvars, BplTrigger(readsCall), 
+                  BplImp(BplAnd(goodHeap, requiresCall), setEmpty)), 
+                emptyReads))));
+        }
       }
     }
 
@@ -12584,6 +12617,10 @@ namespace Microsoft.Dafny {
     Bpl.Expr MkIsGoodHandle(Bpl.Expr x) {
       return FunctionCall(x.tok, BuiltinFunction.IsGoodHandle, null, x);
     }
+    
+    Bpl.Expr MkEmptyReads(Bpl.Expr x) {
+      return FunctionCall(x.tok, BuiltinFunction.EmptyReads, null, x);
+    }
 
     Bpl.Expr MkArityEq(Bpl.Expr f, int n) {
       Contract.Assert(n >= 0);
@@ -16095,6 +16132,7 @@ namespace Microsoft.Dafny {
       IsAlloc, IsAllocBox,
       IsGoodHandle,
       Arity,
+      EmptyReads,
 
       TraitParent,
 
@@ -16297,6 +16335,10 @@ namespace Microsoft.Dafny {
           Contract.Assert(args.Length == 1);
           Contract.Assert(typeInstantiation == null);
           return FunctionCall(tok, "$Arity", Bpl.Type.Int, args);
+        case BuiltinFunction.EmptyReads:
+          Contract.Assert(args.Length == 1);
+          Contract.Assert(typeInstantiation == null);
+          return FunctionCall(tok, "$EmptyReads", Bpl.Type.Bool, args);
 
         case BuiltinFunction.TraitParent:
           Contract.Assert(args.Length == 1);
