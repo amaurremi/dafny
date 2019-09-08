@@ -181,13 +181,14 @@ axiom (forall<T> v : T, t : Ty, h : Heap ::
     ( $IsAllocBox($Box(v), t, h) <==> $IsAlloc(v,t,h) ));
 
 // ---------------------------------------------------------------
-// -- Is, IsAlloc, and Arity -------------------------------------
+// -- Is, IsAlloc, IsGoodHandle, and Arity -----------------------
 // ---------------------------------------------------------------
 
 // Type-argument to $Is is the /representation type/,
 // the second value argument to $Is is the actual type.
 function $Is<T>(T,Ty): bool;           // no heap for now
 function $IsAlloc<T>(T,Ty,Heap): bool;
+function $IsGoodHandle(HandleType): bool;
 function $Arity(HandleType): int;
 
 // Corresponding entries for boxes...
@@ -1373,5 +1374,17 @@ axiom (forall x, y, z: int ::
   { Mul(x, Mul(y, z)) }
   Mul(y, z) != 0 ==> Mul(x, Mul(y, z)) == Mul(Mul(x, y), z));
 #endif
+
+// -------------------------------------------------------------------------
+// -- Function equality and Functional extensionality
+// -------------------------------------------------------------------------
+
+function Fun#Equal(HandleType, HandleType): bool;
+
+axiom (forall f: HandleType, g: HandleType ::
+  { Fun#Equal(f, g) }
+  Fun#Equal(f, g) <==> f == g);
+
+function $EmptyReads(HandleType): bool;
 
 // -------------------------------------------------------------------------

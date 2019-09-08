@@ -1140,6 +1140,8 @@ namespace Microsoft.Dafny {
         return FunctionCall(tok, BuiltinFunction.SeqEqual, null, e0, e1);
       } else if (type.IsIndDatatype) {
         return FunctionCall(tok, type.AsIndDatatype.FullSanitizedName + "#Equal", Bpl.Type.Bool, e0, e1);
+      } else if (type.IsArrowType) {
+        return FunctionCall(tok, BuiltinFunction.FunEqual, null, e0, e1);
       } else {
         return Bpl.Expr.Eq(e0, e1);
       }
@@ -8040,6 +8042,8 @@ namespace Microsoft.Dafny {
       return (ReqReadsApp) Enum.Parse(typeof(ReqReadsApp), char.ToUpper(rra[0]) + rra.Substring(1)); // todo (MR) super ugly
     }
 
+    public readonly string reqReadsAppMatchError = "invalid ReqReadsApp value";
+    
     /// <summary>
     /// The type of the values in a `Requires`/`Reads`/`Apply` map (see type `X` in the description of <see cref="ReqReadsApp"/>)
     /// </summary>
@@ -8052,7 +8056,23 @@ namespace Microsoft.Dafny {
         case ReqReadsApp.Apply:
           return defaultRetType ?? predef.BoxType;
         default:
-          throw new ArgumentException("invalid ReqReadsApp value");
+          throw new ArgumentException(reqReadsAppMatchError);
+      }
+    }
+    
+    // <summary>
+    // The names of `Requires`/`Reads`/`Apply` functions when they appear as parameters of a `Handle`
+    // </summary>
+    public String RraSelector(ReqReadsApp rra) {
+      switch (rra) {
+        case ReqReadsApp.Requires:
+          return "r";
+        case ReqReadsApp.Reads:
+          return "rd";
+        case ReqReadsApp.Apply:
+          return "h";
+        default:
+          throw new ArgumentException(reqReadsAppMatchError);
       }
     }
 
@@ -8329,18 +8349,18 @@ namespace Microsoft.Dafny {
 
       {
         // forall p: [Heap, Box, ..., Box] Box, heap : Heap, b1, ..., bN : Box
-        //      :: ApplyN(HandleN(h, r, rd))[heap, b1, ..., bN] == h[heap, b1, ..., bN]
+        //      :: ApplyN(HandleN(h, r, rd))[heap, b1, ..., bN] == h[heap, b1, ..., bN] <== r[heap, b1, ..., bN]
         //      :: RequiresN(HandleN(h, r, rd))[heap, b1, ..., bN] <== r[heap, b1, ..., bN]
-        //      :: ReadsN(HandleN(h, r, rd))[heap, b1, ..., bN] == rd[heap, b1, ..., bN]
-        Action<ReqReadsApp, string> SelectorSemantics = (selector, selectorVar) => {
+        //      :: ReadsN(HandleN(h, r, rd))[heap, b1, ..., bN] == rd[heap, b1, ..., bN] <== r[heap, b1, ..., bN]
+        Action<ReqReadsApp> SelectorSemantics = (selector) => {
           var bvars = new List<Bpl.Variable>();
 
+          var selectorVar = RraSelector(selector);
           var heap = BplBoundVar("heap", predef.HeapType, bvars);
 
+          Func<ReqReadsApp, Expr> genArg = rra => BplBoundVar(RraSelector(rra), RraMapType(tok, arity, rra), bvars);
           var handleargs = new List<Bpl.Expr> {
-            BplBoundVar("h", RraMapType(tok, arity, ReqReadsApp.Apply), bvars),
-            BplBoundVar("r", RraMapType(tok, arity, ReqReadsApp.Requires), bvars),
-            BplBoundVar("rd", RraMapType(tok, arity, ReqReadsApp.Reads), bvars)
+            genArg(ReqReadsApp.Apply), genArg(ReqReadsApp.Requires), genArg(ReqReadsApp.Reads)
           };
 
           var boxes = Map(Enumerable.Range(0, arity), i => BplBoundVar("bx" + i, predef.BoxType, bvars));
@@ -8350,22 +8370,29 @@ namespace Microsoft.Dafny {
          
           Bpl.Expr rhs = new Bpl.NAryExpr(tok, new Bpl.MapSelect(tok, arity + 1),
             Cons(new Bpl.IdentifierExpr(tok, selectorVar, RraMapType(tok, arity, selector)), Cons(heap, boxes)));
-          Func<Bpl.Expr, Bpl.Expr, Bpl.Expr> op = Bpl.Expr.Eq;
-          if (selectorVar == "rd") {
-            var bx = BplBoundVar("bx", predef.BoxType, bvars);
-            lhs = Bpl.Expr.SelectTok(tok, lhs, bx);
-            rhs = Bpl.Expr.SelectTok(tok, rhs, bx);
-            // op = Bpl.Expr.Imp;
-          }
-          if (selectorVar == "r") {
-            op = (u, v) => Bpl.Expr.Imp(v, u);
+          Func<Bpl.Expr, Bpl.Expr, Bpl.Expr> op;
+          var req = new Bpl.NAryExpr(tok, new Bpl.MapSelect(tok, arity + 1),
+            Cons(new Bpl.IdentifierExpr(tok, RraSelector(ReqReadsApp.Requires), RraMapType(tok, arity, ReqReadsApp.Requires)), Cons(heap, boxes)));
+          switch (selector) {
+            case ReqReadsApp.Reads:
+              op = Bpl.Expr.Eq;
+              var bx = BplBoundVar("bx", predef.BoxType, bvars);
+              lhs = Bpl.Expr.SelectTok(tok, lhs, bx);
+              rhs = Bpl.Expr.SelectTok(tok, rhs, bx);
+              break;
+            case ReqReadsApp.Requires:
+            case ReqReadsApp.Apply:
+              op = (u, v) => Bpl.Expr.Imp(req, Bpl.Expr.Eq(u, v));
+              break;
+            default:
+              throw new ArgumentException(reqReadsAppMatchError);
           }
           sink.AddTopLevelDeclaration(new Axiom(tok,
             BplForall(bvars, BplTrigger(lhs), op(lhs, rhs))));
         };
-        SelectorSemantics(ReqReadsApp.Apply, "h");
-        SelectorSemantics(ReqReadsApp.Requires, "r");
-        SelectorSemantics(ReqReadsApp.Reads, "rd");
+        SelectorSemantics(ReqReadsApp.Apply);
+        SelectorSemantics(ReqReadsApp.Requires);
+        SelectorSemantics(ReqReadsApp.Reads);
 
         // function {:inline true}
         //   FuncN._requires#canCall(G...G G: Ty, H:Heap, f:Handle, x ... x :Box): bool
@@ -8392,10 +8419,28 @@ namespace Microsoft.Dafny {
         UserSelectorFunction(RraName(ReqReadsApp.Requires, ad.Arity), ad.Requires);
         UserSelectorFunction(RraName(ReqReadsApp.Reads, ad.Arity), ad.Reads);
 
-        // frame axiom
+        // frame axiom and is-good-handle axiom
         /*
-
+          frame axiom:
+          
           forall h0, h1 : Heap, f : HandleType, bx1 .. bxN : Box,
+            HeapSucc(h0, h1) && GoodHeap(h0) && GoodHeap(h1)
+            && Is[&IsAllocBox](bxI, tI, h0)              // in h0, not hN
+            && Is[&IsAlloc](f, Func(t1,..,tN, tN+1), h0) // in h0, not hN
+            && IsGoodHandle(f)
+            &&
+            (forall o : ref::
+                 o != null [&& h0[o, alloc] && h1[o, alloc] &&]
+                 Reads(h,hN,bxs)[Box(o)]             // for hN in h0 and h1
+              ==> h0[o,field] == h1[o,field])
+          ==>  Reads(..h0..) == Reads(..h1..)
+           AND Requires(f,h0,bxs) == Requires(f,h1,bxs) // which is needed for the next
+           AND  Apply(f,h0,bxs) == Apply(f,h0,bxs)
+           
+           is-good-handle axiom:
+           
+           forall f: HandleType,
+           (forall h0, h1 : Heap, bx1 .. bxN : Box,
             HeapSucc(h0, h1) && GoodHeap(h0) && GoodHeap(h1)
             && Is[&IsAllocBox](bxI, tI, h0)              // in h0, not hN
             && Is[&IsAlloc](f, Func(t1,..,tN, tN+1), h0) // in h0, not hN
@@ -8406,7 +8451,12 @@ namespace Microsoft.Dafny {
               ==> h0[o,field] == h1[o,field])
           ==>  Reads(..h0..) == Reads(..h1..)
            AND Requires(f,h0,bxs) == Requires(f,h1,bxs) // which is needed for the next
-           AND  Apply(f,h0,bxs) == Apply(f,h0,bxs)
+           AND  Apply(f,h0,bxs) == Apply(f,h0,bxs))
+           ==>
+           IsGoodHandle(f)
+           
+           The latter axiom essentially says that if the "frame axiom" holds for a handle
+           (without the fram axiom's IsGoodHandle antecedent) then the handle is good.
 
            The [...] expressions are omitted for /allocated:0 and /allocated:1:
              - in these modes, functions are pure values and IsAlloc of a function is trivially true
@@ -8418,6 +8468,8 @@ namespace Microsoft.Dafny {
                1) f has an empty reads clause
                2) f explictly states that everything is its reads clause is allocated
          */
+        // todo (MR) there currently are no tests that rely on the IsGoodHandle axiom
+        
         {
           var bvars = new List<Bpl.Variable>();
 
@@ -8432,18 +8484,13 @@ namespace Microsoft.Dafny {
             FunctionCall(tok, BuiltinFunction.IsGoodHeap, null, h0),
             FunctionCall(tok, BuiltinFunction.IsGoodHeap, null, h1));
 
-          var f = BplBoundVar("f", predef.HandleType, bvars);
+          Bpl.Expr f;
+          var fVar = BplBoundVar("f", predef.HandleType, out f);
           var boxes = Map(Enumerable.Range(0, arity), i => BplBoundVar("bx" + i, predef.BoxType, bvars));
 
           var isAlloc = MkIsAlloc(f, ClassTyCon(ad, types), h0);
-          var isness = commonNotFrugalHeapUse
-            ? BplAnd(
-              Snoc(Map(Enumerable.Range(0, arity), i =>
-                  BplAnd(MkIs(boxes[i], types[i], true), MkIsAlloc(boxes[i], types[i], h0, true))),
-                BplAnd(MkIs(f, ClassTyCon(ad, types)), isAlloc)))
-            : MkArityEq(f, arity);
 
-          Action<Bpl.Expr, ReqReadsApp, int> AddFrameForFunction = (hN, rra, adArity) => {
+          Action<Bpl.Expr, ReqReadsApp, int, bool> AddFrameOrGoodHandleForFunction = (hN, rra, adArity, frame) => {
 
             // inner forall vars
             var ivars = new List<Bpl.Variable>();
@@ -8470,20 +8517,45 @@ namespace Microsoft.Dafny {
               trigger.Add(isAlloc);
             }
 
-            sink.AddTopLevelDeclaration(new Axiom(tok,
-              BplForall(bvars,
-                new Bpl.Trigger(tok, true, trigger),
-                BplImp(
-                  BplAnd(BplAnd(BplAnd(heapSucc, goodHeaps), isness), inner_forall),
-                  Bpl.Expr.Eq(fn(h0), fn(h1)))), "frame axiom for " + RraName(rra, adArity)));
+            var goodHandle = MkIsGoodHandle(f);
+            var arityEq = MkArityEq(f, arity);
+            var isness = commonNotFrugalHeapUse
+              ? BplAnd(
+                Snoc(Map(Enumerable.Range(0, arity), i =>
+                    BplAnd(MkIs(boxes[i], types[i], true), MkIsAlloc(boxes[i], types[i], h0, true))),
+                  BplAnd(MkIs(f, ClassTyCon(ad, types)), isAlloc)))
+              : BplAnd(goodHandle, arityEq);
+
+            var axiomBvars = frame ? new List<Variable>() { fVar } : new List<Variable>();
+            axiomBvars.AddRange(bvars);
+            var axiomBody = BplForall(axiomBvars,
+              new Bpl.Trigger(tok, true, trigger),
+              BplImp(
+                BplAnd(BplAnd(BplAnd(heapSucc, goodHeaps), frame ? isness : arityEq), inner_forall),
+                Bpl.Expr.Eq(fn(h0), fn(h1))));
+            
+            if (frame) {
+              sink.AddTopLevelDeclaration(new Axiom(tok,
+                axiomBody, "frame axiom for " + RraName(rra, adArity)));
+            } else {
+              sink.AddTopLevelDeclaration(new Axiom(tok,
+                BplForall(new List<Variable>() { fVar }, 
+                  new Bpl.Trigger(tok, true, new List<Bpl.Expr> { goodHandle }),
+                  BplImp(axiomBody,goodHandle)), "IsGoodHandle axiom for arity " + arity));
+            }
           };
 
-          AddFrameForFunction(h0, ReqReadsApp.Apply, ad.Arity);
-          AddFrameForFunction(h1, ReqReadsApp.Apply, ad.Arity);
-          AddFrameForFunction(h0, ReqReadsApp.Reads, ad.Arity);
-          AddFrameForFunction(h1, ReqReadsApp.Reads, ad.Arity);
-          AddFrameForFunction(h0, ReqReadsApp.Requires, ad.Arity);
-          AddFrameForFunction(h1, ReqReadsApp.Requires, ad.Arity);
+          // frame axioms
+          AddFrameOrGoodHandleForFunction(h0, ReqReadsApp.Apply, ad.Arity, true);
+          AddFrameOrGoodHandleForFunction(h1, ReqReadsApp.Apply, ad.Arity, true);
+          AddFrameOrGoodHandleForFunction(h0, ReqReadsApp.Reads, ad.Arity, true);
+          AddFrameOrGoodHandleForFunction(h1, ReqReadsApp.Reads, ad.Arity, true);
+          AddFrameOrGoodHandleForFunction(h0, ReqReadsApp.Requires, ad.Arity, true);
+          AddFrameOrGoodHandleForFunction(h1, ReqReadsApp.Requires, ad.Arity, true);
+          // is-good-handle axioms
+          AddFrameOrGoodHandleForFunction(h0, ReqReadsApp.Requires, ad.Arity, false);
+          AddFrameOrGoodHandleForFunction(h1, ReqReadsApp.Requires, ad.Arity, false);
+
         }
 
         /* axiom (forall heap: Heap, f: HandleType, bx..: Box ::
@@ -8614,7 +8686,7 @@ namespace Microsoft.Dafny {
         // $Arity axiom
         /*
            axiom (forall f: HandleType ::
-             { Arity(f) == N }
+             { Arity(f) }
              Arity(f) == N <==> (exists t0: Ty, ..., tN+1 :: $Is(f, Tclass._System.___hFuncN(t0, ..., tN+1))));
         */
         {
@@ -8752,6 +8824,86 @@ namespace Microsoft.Dafny {
               BplImp(BplAnd(goodHeap, isAlloc),
                 BplForall(bvarsInner, BplTrigger(applied),
                   BplImp(BplAnd(isAllocBoxes, pre), applied_isAlloc))))));
+        }
+        
+        // $EmptyReads axiom
+        /*
+         axiom (forall h: HandleType ::
+          { EmptyReads(h) }
+          (forall bx: Box, ..., bx: Box, heap: Heap ::
+             { ReadsN(h)[heap, bx, ..., bx] }
+             $IsGoodHeap(heap) &&
+             RequiresN(h)[heap, bx, ..., bx] ==>
+             Set#Equal(ReadsN(h)[heap, bx], Set#Empty(): Set Box))
+          ==> EmptyReads(h));
+        */
+        {
+          var bvarsOuter = new List<Bpl.Variable>();
+          var f = BplBoundVar("f", predef.HandleType, bvarsOuter);
+
+          var bvars = new List<Bpl.Variable>();
+          var boxes = Map(Enumerable.Range(0, arity), i => BplBoundVar("bx" + i, predef.BoxType, bvars));
+          var h = BplBoundVar("h", predef.HeapType, bvars);
+          var readsCall = ReadsCall(tok, boxes.Count, f, boxes, h);
+          var requiresCall = RequiresCall(tok, boxes.Count, f, boxes, h);
+          var goodHeap = FunctionCall(tok, BuiltinFunction.IsGoodHeap, null, h);
+          
+          var empty = FunctionCall(tok, BuiltinFunction.SetEmpty, predef.BoxType);
+          var setEmpty = FunctionCall(tok, BuiltinFunction.SetEqual, null, readsCall, empty);
+          var emptyReads = MkEmptyReads(f);
+
+          sink.AddTopLevelDeclaration(new Axiom(tok,
+            BplForall(bvarsOuter, BplTrigger(emptyReads), 
+              BplImp(BplForall(bvars, BplTrigger(readsCall), 
+                  BplImp(BplAnd(goodHeap, requiresCall), setEmpty)), 
+                emptyReads)), "$EmptyReads axiom for arity " + arity));
+        }
+        
+        // Function extensionality axiom
+        /*
+         axiom (forall f: HandleType, g: HandleType ::
+          { Fun#Equal(f, g) }
+          EmptyReads(f) && EmptyReads(g) &&
+          ((forall bx: Box, ..., bx: Box, heap: Heap ::
+             { RequiresN(f)[heap, bx, ..., bx] }
+             { RequiresN(g)[heap, bx, ..., bx] }
+             $IsGoodHeap(heap) ==> RequiresN(f)[heap, bx, ..., bx] == RequiresN(g)[heap, bx, ..., bx]) &&
+           (forall bx: Box, ..., bx: Box, heap: Heap ::
+             { ApplyN(f)[heap, bx, ..., bx] }
+             { ApplyN(g)[heap, bx, ..., bx] }
+             $IsGoodHeap(heap) && RequiresN(f)[heap, bx, ..., bx] ==>
+             ApplyN(f)[heap, bx, ..., bx] == ApplyN(g)[heap, bx, ..., bx])) ==>
+          Fun#Equal(f, g));
+         */
+
+        {
+          var bvarsOuter = new List<Bpl.Variable>();
+          var f = BplBoundVar("f", predef.HandleType, bvarsOuter);
+          var g = BplBoundVar("g", predef.HandleType, bvarsOuter);
+          var funEqual = FunctionCall(tok, BuiltinFunction.FunEqual, null, f, g);
+
+          var bvars = new List<Bpl.Variable>();
+          var boxes = Map(Enumerable.Range(0, arity), i => BplBoundVar("bx" + i, predef.BoxType, bvars));
+          var h = BplBoundVar("h", predef.HeapType, bvars);
+          var requiresCallF = RequiresCall(tok, boxes.Count, f, boxes, h);
+          var requiresCallG = RequiresCall(tok, boxes.Count, g, boxes, h);
+          var applyCallF = ApplyCall(tok, boxes.Count, f, boxes, h);
+          var applyCallG = ApplyCall(tok, boxes.Count, g, boxes, h);
+          var reqTrigger = new Trigger(tok, true, new List<Expr>() {requiresCallF},
+            BplTrigger(requiresCallG));
+          var applyTrigger = new Trigger(tok, true, new List<Expr>() {applyCallF},
+            BplTrigger(applyCallG));
+          var goodHeap = FunctionCall(tok, BuiltinFunction.IsGoodHeap, null, h);
+
+          sink.AddTopLevelDeclaration((new Axiom(tok,
+            BplForall(bvarsOuter, BplTrigger(funEqual),
+              BplImp(BplAnd(BplAnd(MkEmptyReads(f), MkEmptyReads(g)),
+                  BplAnd(
+                    BplForall(bvars, reqTrigger,
+                      BplImp(goodHeap, Bpl.Expr.Eq(requiresCallF, requiresCallG))),
+                    BplForall(bvars, applyTrigger,
+                      BplImp(BplAnd(goodHeap, requiresCallF), Bpl.Expr.Eq(applyCallF, applyCallG))))),
+                funEqual)), "function extensionality axiom for arity " + arity)));
         }
       }
     }
@@ -12387,6 +12539,8 @@ namespace Microsoft.Dafny {
         UserDefinedType udt = (UserDefinedType)type;
         var oneOfTheCases = FunctionCall(tok, "$IsA#" + udt.ResolvedClass.FullSanitizedName, Bpl.Type.Bool, x);
         return BplAnd(r, oneOfTheCases);
+      } else if (type.IsArrowType) {
+        return BplAnd(r, MkIsGoodHandle(x));
       } else {
         return r;
       }
@@ -12507,6 +12661,14 @@ namespace Microsoft.Dafny {
       }
     }
 
+    Bpl.Expr MkIsGoodHandle(Bpl.Expr x) {
+      return FunctionCall(x.tok, BuiltinFunction.IsGoodHandle, null, x);
+    }
+    
+    Bpl.Expr MkEmptyReads(Bpl.Expr x) {
+      return FunctionCall(x.tok, BuiltinFunction.EmptyReads, null, x);
+    }
+
     Bpl.Expr MkArityEq(Bpl.Expr f, int n) {
       Contract.Assert(n >= 0);
       return Bpl.Expr.Eq(MkArity(f), Bpl.Expr.Literal(n));
@@ -12606,6 +12768,9 @@ namespace Microsoft.Dafny {
       var rhss = new List<AssignmentRhs>() { rhs };
       ProcessRhss(lhsBuilder, bLhss, lhss, rhss, builder, locals, etran);
       builder.Add(CaptureState(stmt));
+      if (lhs.Type.IsArrowType) {
+        builder.Add(new Bpl.AssumeCmd(lhs.tok, MkIsGoodHandle(etran.TrExpr(lhs))));
+      }
     }
 
     void ProcessRhss(List<AssignToLhs> lhsBuilder, List<Bpl.IdentifierExpr/*may be null*/> bLhss,
@@ -14939,7 +15104,7 @@ namespace Microsoft.Dafny {
                 var e1args = e.E1.Type.NormalizeExpand().TypeArgs;
                 return translator.CoEqualCall(cot, e0args, e1args, null, this.layerInterCluster.LayerN((int)FuelSetting.FuelAmount.HIGH), e0, e1, expr.tok);
               }
-              if (e.E0.Type.IsIndDatatype) {
+              if (e.E0.Type.IsIndDatatype || e.E0.Type.IsArrowType) {
                 return translator.TypeSpecificEqual(expr.tok, e.E0.Type, e0, e1);
               }
               typ = Bpl.Type.Bool;
@@ -16012,7 +16177,9 @@ namespace Microsoft.Dafny {
 
       Is, IsBox,
       IsAlloc, IsAllocBox,
+      IsGoodHandle,
       Arity,
+      EmptyReads,
 
       TraitParent,
 
@@ -16077,6 +16244,8 @@ namespace Microsoft.Dafny {
       IMapElements,
       IMapEqual,
       IMapGlue,
+      
+      FunEqual,
 
       IndexField,
       MultiIndexField,
@@ -16205,10 +16374,18 @@ namespace Microsoft.Dafny {
           Contract.Assert(args.Length == 3);
           Contract.Assert(typeInstantiation == null);
           return FunctionCall(tok, "$IsAllocBox", Bpl.Type.Bool, args);
+        case BuiltinFunction.IsGoodHandle:
+          Contract.Assert(args.Length == 1);
+          Contract.Assert(typeInstantiation == null);
+          return FunctionCall(tok, "$IsGoodHandle", Bpl.Type.Bool, args);
         case BuiltinFunction.Arity:
           Contract.Assert(args.Length == 1);
           Contract.Assert(typeInstantiation == null);
           return FunctionCall(tok, "$Arity", Bpl.Type.Int, args);
+        case BuiltinFunction.EmptyReads:
+          Contract.Assert(args.Length == 1);
+          Contract.Assert(typeInstantiation == null);
+          return FunctionCall(tok, "$EmptyReads", Bpl.Type.Bool, args);
 
         case BuiltinFunction.TraitParent:
           Contract.Assert(args.Length == 1);
@@ -16337,6 +16514,12 @@ namespace Microsoft.Dafny {
           Contract.Assert(args.Length == 1);
           Contract.Assert(typeInstantiation == null);
           return FunctionCall(tok, "$IsGoodMultiSet", Bpl.Type.Bool, args);
+        
+        case BuiltinFunction.FunEqual:
+          Contract.Assert(args.Length == 2);
+          Contract.Assert(typeInstantiation == null);
+          Expr heap = new Bpl.IdentifierExpr(tok, predef.HeapVarName, predef.HeapType);
+          return FunctionCall(tok, "Fun#Equal", Bpl.Type.Bool, args);
 
         case BuiltinFunction.SeqLength:
           Contract.Assert(args.Length == 1);
